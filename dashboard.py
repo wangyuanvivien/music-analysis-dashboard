@@ -60,7 +60,7 @@ def get_final_data():
         if 'initialized' not in st.session_state or st.session_state['initialized'] == False:
             # 只有在初次運行時執行一次初始化
             df = initialize_session_state(df)
-            st.session_state['initialized'] = True
+            st.session_session_state['initialized'] = True
             
         # 確保在隨後的運行中，DF 仍然帶有這個計算好的欄位
         if 'has_ai_analysis' not in df.columns:
@@ -73,14 +73,16 @@ def get_final_data():
 def plot_categorical_chart(df, column, title, top_n=15):
     """ 繪製分類型別的長條圖 """
     if column not in df.columns or df[column].dropna().empty: return None
-    data = df.dropna(subset=[column])
+    # *** 關鍵修復：使用 .copy() 確保是獨立的 DataFrame，消除 SettingWithCopyWarning ***
+    data = df.dropna(subset=[column]).copy()
     
     if column == 'key_key':
         key_map = {
             0.0: 'C', 1.0: 'C#', 2.0: 'D', 3.0: 'D#', 4.0: 'E', 5.0: 'F',
             6.0: 'F#', 7.0: 'G', 8.0: 'G#', 9.0: 'A', 10.0: 'A#', 11.0: 'B'
         }
-        data['key_name'] = data[column].apply(lambda x: key_map.get(x, pd.NA))
+        # 使用 .loc 避免 SettingWithCopyWarning
+        data.loc[:, 'key_name'] = data[column].apply(lambda x: key_map.get(x, pd.NA))
         data = data.dropna(subset=['key_name'])
         column = 'key_name'
         title = "歌曲調性 (Key)"
@@ -102,7 +104,8 @@ def plot_categorical_chart(df, column, title, top_n=15):
 def plot_histogram(df, column, title, bin_count=10):
     """ 繪製數值型別的直方圖 (Histogram) """
     if column not in df.columns or df[column].dropna().empty: return None
-    data = df.dropna(subset=[column])
+    # *** 關鍵修復：使用 .copy() 確保是獨立的 DataFrame，消除 SettingWithCopyWarning ***
+    data = df.dropna(subset=[column]).copy()
 
     chart = alt.Chart(data).mark_bar().encode(
         alt.X(column, bin=alt.Bin(maxbins=bin_count), title=title),
@@ -153,7 +156,7 @@ def main():
     # --- 5. 頁面邏輯 ---
 
     if selected_song == '[ 主儀表板 (General Dashboard) ]':
-        st.title("張信哲 (Jeff Chang) AI 歌詞分析儀表板 v1.8 [最終穩定版]") 
+        st.title("張信哲 (Jeff Chang) AI 歌詞分析儀表板 v1.9 [最終穩定版]") # 更新版本號
         
         # 統計數據
         total_songs = len(df)
