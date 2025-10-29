@@ -48,6 +48,9 @@ def initialize_session_state(df):
         df['has_ai_analysis'] = False
         st.session_state['ai_available'] = False
     
+    # *** 關鍵修復：st.session_session_state -> st.session_state ***
+    st.session_state['initialized'] = True
+    
     return df
 
 @st.cache_data(show_spinner=False)
@@ -60,8 +63,6 @@ def get_final_data():
         if 'initialized' not in st.session_state or st.session_state['initialized'] == False:
             # 只有在初次運行時執行一次初始化
             df = initialize_session_state(df)
-            # *** 關鍵修復：st.session_session_state -> st.session_state ***
-            st.session_state['initialized'] = True
             
         # 確保在隨後的運行中，DF 仍然帶有這個計算好的欄位
         if 'has_ai_analysis' not in df.columns:
@@ -157,7 +158,7 @@ def main():
     # --- 5. 頁面邏輯 ---
 
     if selected_song == '[ 主儀表板 (General Dashboard) ]':
-        st.title("張信哲 (Jeff Chang) AI 歌詞分析儀表板 v1.10 [最終修復]") # 更新版本號
+        st.title("張信哲 (Jeff Chang) AI 歌詞分析儀表板 v1.11 [最終修復]") # 更新版本號
         
         # 統計數據
         total_songs = len(df)
