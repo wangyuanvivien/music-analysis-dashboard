@@ -18,55 +18,26 @@ AI_COLS = ['ai_theme', 'ai_sentiment', 'ai_notes']
 
 # --- 3. 輔助函式 (Helper Functions) ---
 
-@st.cache_data(show_spinner="正在載入資料並檢查 AI 分析...", persist=True)
+@st.cache_data(show_spinner="正在載入資料...", persist=True) # 只負責載入
 def load_data_from_disk():
     """ 載入單一的主儀表板資料檔案。 """
     
     DATA_FILE = Path(__file__).parent / DATA_FILE_NAME
     
     if not DATA_FILE.exists():
-        return None
+        st.error(f"致命錯誤：找不到儀表板主資料檔案: {DATA_FILE_NAME}")
+        st.stop() # 停止執行
+        return None 
     
     try:
         df = pd.read_csv(str(DATA_FILE), encoding='utf-8-sig', low_memory=False)
         return df
     except Exception as e:
-        # 捕獲所有讀取錯誤，並返回 None
+        st.error(f"載入 {DATA_FILE_NAME} 時發生嚴重錯誤: {e}")
         return None
 
-def initialize_data_and_state(df):
-    """ 在數據載入成功後，初始化 df 欄位和 session_state。 """
-    
-    # 檢查 AI 欄位是否存在
-    if all(col in df.columns for col in AI_COLS):
-        df['has_ai_analysis'] = df['ai_theme'].notna() & (~df['ai_theme'].isin(['SKIPPED', 'ERROR']))
-        st.session_state['ai_available'] = True
-    else:
-        df['has_ai_analysis'] = False
-        st.session_state['ai_available'] = False
-        
-    st.session_state['data_initialized'] = True # 設置初始化標記
-    
-    return df
+# (移除了 initialize_data_and_state 和 get_final_data)
 
-@st.cache_data(show_spinner=False)
-def get_final_data():
-    """
-    獲取最終的數據 DataFrame，並在初次時初始化狀態。
-    """
-    df = load_data_from_disk()
-    
-    if df is not None:
-        # 如果是首次運行（或快取失效），則初始化數據和會話狀態
-        if 'data_initialized' not in st.session_state or st.session_state['data_initialized'] == False:
-            df = initialize_data_and_state(df)
-        
-        # 這是最終的防禦：確保 DataFrame 永遠帶有 has_ai_analysis 欄位
-        if 'has_ai_analysis' not in df.columns:
-            df = initialize_data_and_state(df)
-            
-    return df
-    
 @st.cache_data
 def plot_categorical_chart(df, column, title, top_n=15):
     """ 繪製分類型別的長條圖 """
@@ -80,10 +51,14 @@ def plot_categorical_chart(df, column, title, top_n=15):
         }
         data.loc[:, 'key_name'] = data[column].apply(lambda x: key_map.get(x, pd.NA))
         data = data.dropna(subset=['key_name'])
+        if data.empty: return None # 如果轉換後沒有數據，則返回
         column = 'key_name'
         title = "歌曲調性 (Key)"
 
+    # 在計算 value_counts 之前再次檢查 data 是否為空
+    if data.empty: return None
     chart_data = data[column].value_counts().head(top_n).reset_index()
+    if chart_data.empty: return None # 如果計數後沒有數據，則返回
     chart_data.columns = [column, 'count']
 
     chart = alt.Chart(chart_data).mark_bar().encode(
@@ -101,6 +76,7 @@ def plot_histogram(df, column, title, bin_count=10):
     """ 繪製數值型別的直方圖 (Histogram) """
     if column not in df.columns or df[column].dropna().empty: return None
     data = df.dropna(subset=[column]).copy()
+    if data.empty: return None # 如果去除 NaN 後沒有數據，則返回
 
     chart = alt.Chart(data).mark_bar().encode(
         alt.X(column, bin=alt.Bin(maxbins=bin_count), title=title),
@@ -114,13 +90,27 @@ def plot_histogram(df, column, title, bin_count=10):
 # --- 4. 儀表板主要應用程式 ---
 def main():
     
-    df = get_final_data()
+    # *** 關鍵修復：每次運行都從快取載入數據 ***
+    df = load_data_from_disk()
 
     # --- 4a. 處理資料載入失敗 ---
     if df is None:
         st.title("張信哲 (Jeff Chang) AI 歌詞分析儀表板")
         st.error("資料載入失敗，請檢查 Streamlit 應用程式日誌。")
         return
+
+    # *** 關鍵修復：將初始化邏輯移至 main() 內部 ***
+    # 這樣可以確保它在每次重新運行時都基於最新的 df 執行
+    ai_available = False
+    if all(col in df.columns for col in AI_COLS):
+        # 只有在 AI 欄位確實存在時才計算
+        df['has_ai_analysis'] = df['ai_theme'].notna() & (~df['ai_theme'].isin(['SKIPPED', 'ERROR']))
+        ai_available = True
+    else:
+        df['has_ai_analysis'] = False
+        # 不再依賴 session_state 來顯示警告，直接檢查欄位
+        if not ai_available:
+             st.warning("AI 分析資料欄位不存在於 CSV 檔案中。AI 圖表將不可用。")
 
     # --- 4b. 成功的資料載入 ---
     
@@ -151,11 +141,12 @@ def main():
     # --- 5. 頁面邏輯 ---
 
     if selected_song == '[ 主儀表板 (General Dashboard) ]':
-        st.title("張信哲 (Jeff Chang) AI 歌詞分析儀表板 v1.12 [終極穩定版]") 
+        st.title("張信哲 (Jeff Chang) AI 歌詞分析儀表板 v1.13 [終極穩定版]") 
         
         # 統計數據
         total_songs = len(df)
         songs_with_lyrics = df['lyrics_text'].notna().sum()
+        # 直接從 DataFrame 計算，不再依賴 session_state
         songs_with_ai = (df['has_ai_analysis'] == True).sum()
 
         st.info(f"總歌曲數: {total_songs} | 包含歌詞: {songs_with_lyrics} 筆 | 已獲 AI 分析: {songs_with_ai} 筆")
@@ -164,13 +155,13 @@ def main():
         
         col1, col2 = st.columns(2)
         
-        # 只有在 AI 可用時才顯示圖表
-        if st.session_state.get('ai_available', False) and songs_with_ai > 0:
+        # 使用本地變數 ai_available
+        if ai_available and songs_with_ai > 0:
             df_analyzed = df[df['has_ai_analysis'] == True]
             
+            # 再次檢查 df_analyzed 是否為空
             if not df_analyzed.empty:
                 with col1:
-                    # 圖表 1: AI 分析的情緒分佈
                     st.subheader("AI 分析的情緒分佈")
                     sentiment_counts = df_analyzed['ai_sentiment'].value_counts().reset_index()
                     sentiment_counts.columns = ['情緒 (Sentiment)', '歌曲數量 (Count)']
@@ -183,7 +174,6 @@ def main():
                     st.altair_chart(chart_sentiment, use_container_width=True)
 
                 with col2:
-                    # 圖表 2: AI 分析的主題分佈
                     st.subheader("AI 分析的主題分佈")
                     theme_counts = df_analyzed['ai_theme'].value_counts().head(10).reset_index()
                     theme_counts.columns = ['主題 (Theme)', '歌曲數量 (Count)']
@@ -254,7 +244,8 @@ def main():
             
             # 顯示 AI 分析 (如果存在)
             st.markdown("### AI 綜合分析 (AI Analysis)")
-            if st.session_state.get('ai_available', False) and pd.notna(song_data.get('ai_theme')) and song_data.get('ai_theme') not in ['SKIPPED', 'ERROR']:
+            # 使用本地變數 ai_available
+            if ai_available and pd.notna(song_data.get('ai_theme')) and song_data.get('ai_theme') not in ['SKIPPED', 'ERROR']:
                 st.info(f"**AI 主題 (Theme):**\n{song_data['ai_theme']}")
                 st.warning(f"**AI 情緒 (Sentiment):**\n{song_data['ai_sentiment']}")
                 st.markdown("**AI 綜合筆記 (Notes):**")
@@ -289,5 +280,7 @@ def main():
 
 # --- 6. 執行 Main ---
 if __name__ == "__main__":
+    # 不再依賴 session_state 進行初始化，main() 函數內部會處理
     main()
+
 
