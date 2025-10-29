@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import altair as alt 
-import os
 import numpy as np
 from pathlib import Path
+import os
 
 # --- 1. 頁面設定 (Page Config) ---
 st.set_page_config(
@@ -18,55 +18,57 @@ AI_COLS = ['ai_theme', 'ai_sentiment', 'ai_notes']
 
 # --- 3. 輔助函式 (Helper Functions) ---
 
-@st.cache_data(show_spinner=True) # 載入時顯示轉圈圈，提高使用者體驗
+@st.cache_data(show_spinner="正在載入資料並檢查 AI 分析...", persist=True) # persist=True 盡量保持快取
 def load_data_from_disk():
     """ 載入單一的主儀表板資料檔案。 """
     
+    # 建立檔案路徑 (使用 Path(__file__).parent 確保在 Streamlit 伺服器上的路徑正確)
     DATA_FILE = Path(__file__).parent / DATA_FILE_NAME
     
     if not DATA_FILE.exists():
-        st.error(f"致命錯誤：找不到儀表板主資料檔案: {DATA_FILE_NAME}")
-        st.stop()
+        # 如果檔案不存在，則必須停止並提示錯誤
         return None
     
     try:
         df = pd.read_csv(str(DATA_FILE), encoding='utf-8-sig', low_memory=False)
         return df
     except Exception as e:
-        st.error(f"載入 {DATA_FILE_NAME} 時發生嚴重錯誤，請檢查檔案內容和編碼: {e}")
+        # 捕獲所有讀取錯誤，並返回 None
         return None
 
 def initialize_session_state(df):
     """ 初始化 session_state，只運行一次。 """
-    if 'initialized' not in st.session_state:
-        # 檢查 AI 欄位是否存在
-        if all(col in df.columns for col in AI_COLS):
-            df['has_ai_analysis'] = df['ai_theme'].notna() & (~df['ai_theme'].isin(['SKIPPED', 'ERROR']))
-            st.session_state['ai_available'] = True
-        else:
-            df['has_ai_analysis'] = False
-            st.session_state['ai_available'] = False
-            st.warning("AI 分析資料欄位不存在。部分功能將受影響。")
-        
-        st.session_state['initialized'] = True
     
-    # 確保在每次運行時，我們都使用計算好的 'has_ai_analysis' 欄位
-    # 如果 session_state 已經初始化，df 會帶有這個欄位
-    if 'has_ai_analysis' not in df.columns:
-        df['has_ai_analysis'] = False # 確保它不會導致後續代碼崩潰
+    # 檢查 AI 欄位是否存在
+    if all(col in df.columns for col in AI_COLS):
+        # 建立一個 'has_ai_analysis' 欄位
+        df['has_ai_analysis'] = df['ai_theme'].notna() & (~df['ai_theme'].isin(['SKIPPED', 'ERROR']))
+        st.session_state['ai_available'] = True
+    else:
+        df['has_ai_analysis'] = False
+        st.session_state['ai_available'] = False
     
     return df
 
-
-# 將 load_data_from_disk 的結果傳遞給 initialize_session_state
-@st.cache_data(show_spinner=True)
+@st.cache_data(show_spinner=False)
 def get_final_data():
+    """
+    獲取最終的數據 DataFrame，並在初次時初始化狀態。
+    """
     df = load_data_from_disk()
     if df is not None:
-        df = initialize_session_state(df)
+        if 'initialized' not in st.session_state or st.session_state['initialized'] == False:
+            # 只有在初次運行時執行一次初始化
+            df = initialize_session_state(df)
+            st.session_state['initialized'] = True
+            
+        # 確保在隨後的運行中，DF 仍然帶有這個計算好的欄位
+        if 'has_ai_analysis' not in df.columns:
+            # 這是防止快取錯誤的最佳手段
+            df = initialize_session_state(df)
+            
     return df
     
-
 @st.cache_data
 def plot_categorical_chart(df, column, title, top_n=15):
     """ 繪製分類型別的長條圖 """
@@ -114,7 +116,6 @@ def plot_histogram(df, column, title, bin_count=10):
 # --- 4. 儀表板主要應用程式 ---
 def main():
     
-    # 透過更穩健的快取和初始化機制獲取數據
     df = get_final_data()
 
     # --- 4a. 處理資料載入失敗 ---
@@ -152,7 +153,7 @@ def main():
     # --- 5. 頁面邏輯 ---
 
     if selected_song == '[ 主儀表板 (General Dashboard) ]':
-        st.title("張信哲 (Jeff Chang) AI 歌詞分析儀表板 v1.7 [Final]") # 更新版本號
+        st.title("張信哲 (Jeff Chang) AI 歌詞分析儀表板 v1.8 [最終穩定版]") 
         
         # 統計數據
         total_songs = len(df)
