@@ -18,17 +18,14 @@ AI_COLS = ['ai_theme', 'ai_sentiment', 'ai_notes']
 
 # --- 3. 輔助函式 (Helper Functions) ---
 
-@st.cache_data(show_spinner="正在載入資料...", persist=True) # 只負責載入
+@st.cache_data(show_spinner="正在載入資料...", persist=True) 
 def load_data_from_disk():
     """ 載入單一的主儀表板資料檔案。 """
-    
     DATA_FILE = Path(__file__).parent / DATA_FILE_NAME
-    
     if not DATA_FILE.exists():
         st.error(f"致命錯誤：找不到儀表板主資料檔案: {DATA_FILE_NAME}")
-        st.stop() # 停止執行
-        return None 
-    
+        st.stop()
+        return None
     try:
         df = pd.read_csv(str(DATA_FILE), encoding='utf-8-sig', low_memory=False)
         return df
@@ -36,29 +33,37 @@ def load_data_from_disk():
         st.error(f"載入 {DATA_FILE_NAME} 時發生嚴重錯誤: {e}")
         return None
 
-# (移除了 initialize_data_and_state 和 get_final_data)
+def initialize_data_and_state(df):
+    """ 在數據載入成功後，初始化 df 欄位和 session_state。 """
+    if all(col in df.columns for col in AI_COLS):
+        df['has_ai_analysis'] = df['ai_theme'].notna() & (~df['ai_theme'].isin(['SKIPPED', 'ERROR']))
+        st.session_state['ai_available'] = True
+    else:
+        df['has_ai_analysis'] = False
+        st.session_state['ai_available'] = False
+    st.session_state['data_initialized'] = True
+    return df
 
+@st.cache_data(show_spinner=False)
+def get_final_data():
+    """ 獲取最終的數據 DataFrame，並在初次時初始化狀態。 """
+    df = load_data_from_disk()
+    if df is not None:
+        if 'data_initialized' not in st.session_state or st.session_state['data_initialized'] == False:
+            df = initialize_data_and_state(df)
+        if 'has_ai_analysis' not in df.columns:
+            df = initialize_data_and_state(df)
+    return df
+    
 @st.cache_data
 def plot_categorical_chart(df, column, title, top_n=15):
     """ 繪製分類型別的長條圖 """
     if column not in df.columns or df[column].dropna().empty: return None
     data = df.dropna(subset=[column]).copy()
-    
-    if column == 'key_key':
-        key_map = {
-            0.0: 'C', 1.0: 'C#', 2.0: 'D', 3.0: 'D#', 4.0: 'E', 5.0: 'F',
-            6.0: 'F#', 7.0: 'G', 8.0: 'G#', 9.0: 'A', 10.0: 'A#', 11.0: 'B'
-        }
-        data.loc[:, 'key_name'] = data[column].apply(lambda x: key_map.get(x, pd.NA))
-        data = data.dropna(subset=['key_name'])
-        if data.empty: return None # 如果轉換後沒有數據，則返回
-        column = 'key_name'
-        title = "歌曲調性 (Key)"
-
-    # 在計算 value_counts 之前再次檢查 data 是否為空
     if data.empty: return None
+    
     chart_data = data[column].value_counts().head(top_n).reset_index()
-    if chart_data.empty: return None # 如果計數後沒有數據，則返回
+    if chart_data.empty: return None 
     chart_data.columns = [column, 'count']
 
     chart = alt.Chart(chart_data).mark_bar().encode(
@@ -67,7 +72,7 @@ def plot_categorical_chart(df, column, title, top_n=15):
         color=alt.Color(column, title=title, legend=None),
         tooltip=[column, 'count']
     ).properties(
-        title=f"{title} 分佈 (Top {top_n})" if column != 'key_name' else f"{title} 分佈"
+        title=f"{title} 分佈 (Top {top_n})"
     ).interactive()
     return chart
 
@@ -76,7 +81,7 @@ def plot_histogram(df, column, title, bin_count=10):
     """ 繪製數值型別的直方圖 (Histogram) """
     if column not in df.columns or df[column].dropna().empty: return None
     data = df.dropna(subset=[column]).copy()
-    if data.empty: return None # 如果去除 NaN 後沒有數據，則返回
+    if data.empty: return None 
 
     chart = alt.Chart(data).mark_bar().encode(
         alt.X(column, bin=alt.Bin(maxbins=bin_count), title=title),
@@ -87,11 +92,47 @@ def plot_histogram(df, column, title, bin_count=10):
     ).interactive()
     return chart
 
+# *** 新增：繪製餅圖的函式 ***
+@st.cache_data
+def plot_pie_chart(df, column, title, top_n=10):
+    """ 繪製分類型別的餅圖 """
+    if column not in df.columns or df[column].dropna().empty: return None
+    data = df.dropna(subset=[column]).copy()
+    if data.empty: return None
+
+    # 計算各類別數量並選取 Top N
+    chart_data = data[column].value_counts().head(top_n).reset_index()
+    if chart_data.empty: return None
+    chart_data.columns = [column, 'count']
+    
+    # 計算總數以計算百分比
+    total = chart_data['count'].sum()
+    chart_data['percent'] = (chart_data['count'] / total)
+
+    base = alt.Chart(chart_data).encode(
+        theta=alt.Theta("count", stack=True)
+    )
+    
+    pie = base.mark_arc(outerRadius=120, innerRadius=50).encode(
+        color=alt.Color(column, title=title),
+        order=alt.Order("count", sort="descending"), # 確保顏色分配一致
+        tooltip=[column, 'count', alt.Tooltip('percent', format='.1%')]
+    )
+    
+    text = base.mark_text(radius=140).encode(
+        text=alt.Text(column, title=title),
+        order=alt.Order("count", sort="descending"),
+        color=alt.value("black") # 設置文字顏色
+    )
+
+    chart = (pie + text).properties(title=f"{title} 分佈 (Top {top_n})")
+    
+    return chart
+
 # --- 4. 儀表板主要應用程式 ---
 def main():
     
-    # *** 關鍵修復：每次運行都從快取載入數據 ***
-    df = load_data_from_disk()
+    df = get_final_data()
 
     # --- 4a. 處理資料載入失敗 ---
     if df is None:
@@ -99,20 +140,15 @@ def main():
         st.error("資料載入失敗，請檢查 Streamlit 應用程式日誌。")
         return
 
-    # *** 關鍵修復：將初始化邏輯移至 main() 內部 ***
-    # 這樣可以確保它在每次重新運行時都基於最新的 df 執行
+    # --- 4b. 初始化狀態和 AI 檢查 ---
     ai_available = False
     if all(col in df.columns for col in AI_COLS):
-        # 只有在 AI 欄位確實存在時才計算
         df['has_ai_analysis'] = df['ai_theme'].notna() & (~df['ai_theme'].isin(['SKIPPED', 'ERROR']))
         ai_available = True
     else:
         df['has_ai_analysis'] = False
-        # 不再依賴 session_state 來顯示警告，直接檢查欄位
-        if not ai_available:
-             st.warning("AI 分析資料欄位不存在於 CSV 檔案中。AI 圖表將不可用。")
 
-    # --- 4b. 成功的資料載入 ---
+    # --- 4c. 成功的資料載入 ---
     
     # --- 側邊欄導航 (Sidebar) ---
     st.sidebar.title("導航 (Navigation)")
@@ -141,12 +177,11 @@ def main():
     # --- 5. 頁面邏輯 ---
 
     if selected_song == '[ 主儀表板 (General Dashboard) ]':
-        st.title("張信哲 (Jeff Chang) AI 歌詞分析儀表板 v1.13 [終極穩定版]") 
+        st.title("張信哲 (Jeff Chang) AI 歌詞分析儀表板 v1.14 [更多圖表]") 
         
         # 統計數據
         total_songs = len(df)
         songs_with_lyrics = df['lyrics_text'].notna().sum()
-        # 直接從 DataFrame 計算，不再依賴 session_state
         songs_with_ai = (df['has_ai_analysis'] == True).sum()
 
         st.info(f"總歌曲數: {total_songs} | 包含歌詞: {songs_with_lyrics} 筆 | 已獲 AI 分析: {songs_with_ai} 筆")
@@ -155,23 +190,27 @@ def main():
         
         col1, col2 = st.columns(2)
         
-        # 使用本地變數 ai_available
+        # 只有在 AI 可用時才顯示圖表
         if ai_available and songs_with_ai > 0:
             df_analyzed = df[df['has_ai_analysis'] == True]
             
-            # 再次檢查 df_analyzed 是否為空
             if not df_analyzed.empty:
                 with col1:
-                    st.subheader("AI 分析的情緒分佈")
-                    sentiment_counts = df_analyzed['ai_sentiment'].value_counts().reset_index()
-                    sentiment_counts.columns = ['情緒 (Sentiment)', '歌曲數量 (Count)']
-                    
-                    chart_sentiment = alt.Chart(sentiment_counts).mark_arc(innerRadius=50).encode(
-                        theta=alt.Theta("歌曲數量 (Count)", stack=True),
-                        color=alt.Color("情緒 (Sentiment)"),
-                        tooltip=["情緒 (Sentiment)", "歌曲數量 (Count)"]
-                    ).properties(title="AI 分析的情緒")
-                    st.altair_chart(chart_sentiment, use_container_width=True)
+                    st.subheader("AI 分析的情緒類別分佈")
+                    # *** 使用更新後的分類欄位 ***
+                    if 'ai_sentiment_category' in df_analyzed.columns:
+                         sentiment_counts = df_analyzed['ai_sentiment_category'].value_counts().reset_index()
+                         sentiment_counts.columns = ['情緒類別 (Category)', '歌曲數量 (Count)']
+                         
+                         chart_sentiment = alt.Chart(sentiment_counts).mark_arc(innerRadius=50).encode(
+                             theta=alt.Theta("歌曲數量 (Count)", stack=True),
+                             color=alt.Color("情緒類別 (Category)"),
+                             tooltip=["情緒類別 (Category)", "歌曲數量 (Count)"]
+                         ).properties(title="AI 分析的情緒類別")
+                         st.altair_chart(chart_sentiment, use_container_width=True)
+                    else:
+                         st.caption("欄位 'ai_sentiment_category' 不存在。")
+
 
                 with col2:
                     st.subheader("AI 分析的主題分佈")
@@ -194,32 +233,67 @@ def main():
         # === 音訊資料維度分析 ===
         st.divider() 
         st.header("音訊資料維度分析 (Tonal Data Dimensions)")
+        st.markdown("顯示歌曲的音樂特徵分佈 (僅統計有資料的歌曲)。")
 
-        st.subheader("分類型資料 (Categorical Data)")
-        chart_col1, chart_col2, chart_col3 = st.columns(3)
-        
-        with chart_col1:
-            if chart_genre := plot_categorical_chart(df, 'genre_ros', '音樂流派 (Genre)', top_n=15):
+        # --- 新增：Mood 餅圖 ---
+        st.subheader("情緒維度 (Mood Dimensions) - 高/低比例")
+        mood_cols = [col for col in df.columns if col.startswith('mood_')]
+        mood_chart_cols = st.columns(len(mood_cols)) # 為每個 mood 建立一欄
+
+        for i, mood_col in enumerate(mood_cols):
+            with mood_chart_cols[i]:
+                # 將 mood 分數二值化
+                df_mood = df.dropna(subset=[mood_col]).copy()
+                if not df_mood.empty:
+                    df_mood[f'{mood_col}_bin'] = np.where(df_mood[mood_col] >= 0.5, '高 (>=0.5)', '低 (<0.5)')
+                    mood_title = mood_col.replace('mood_', '').capitalize()
+                    
+                    # 使用新的餅圖函式
+                    if chart := plot_pie_chart(df_mood, f'{mood_col}_bin', f'Mood: {mood_title}'):
+                        st.altair_chart(chart, use_container_width=True)
+                # else:
+                #     st.caption(f"欄位 '{mood_col}' 無數據。")
+
+        st.divider()
+        st.subheader("調性與音色 (Key, Scale & Timbre)")
+        key_timbre_cols = st.columns(3)
+
+        with key_timbre_cols[0]:
+            # --- 新增：Key + Scale 餅圖 ---
+            df_key_scale = df.dropna(subset=['key_key', 'key_scale']).copy()
+            if not df_key_scale.empty:
+                key_map = {
+                    0.0: 'C', 1.0: 'C#', 2.0: 'D', 3.0: 'D#', 4.0: 'E', 5.0: 'F',
+                    6.0: 'F#', 7.0: 'G', 8.0: 'G#', 9.0: 'A', 10.0: 'A#', 11.0: 'B'
+                }
+                df_key_scale['key_name'] = df_key_scale['key_key'].apply(lambda x: key_map.get(x, 'N/A'))
+                df_key_scale['key_scale_combined'] = df_key_scale['key_name'] + ' ' + df_key_scale['key_scale']
+                
+                if chart := plot_pie_chart(df_key_scale, 'key_scale_combined', '調性與調式組合'):
+                     st.altair_chart(chart, use_container_width=True)
+            # else:
+            #     st.caption("欄位 'key_key' 或 'key_scale' 無數據。")
+
+        with key_timbre_cols[1]:
+            # --- 新增：Timbre 餅圖 ---
+             if chart := plot_pie_chart(df, 'timbre', '音色 (Timbre)'):
+                 st.altair_chart(chart, use_container_width=True)
+                 
+        with key_timbre_cols[2]:
+            # --- 保留：Genre 長條圖 ---
+            if chart_genre := plot_categorical_chart(df, 'genre_ros', '音樂流派 (Genre)', top_n=10):
                 st.altair_chart(chart_genre, use_container_width=True)
-        
-        with chart_col2:
-            if chart_scale := plot_categorical_chart(df, 'key_scale', '音樂調式 (大/小調)'):
-                st.altair_chart(chart_scale, use_container_width=True)
-        
-        with chart_col3:
-            if chart_key := plot_categorical_chart(df, 'key_key', '歌曲調性 (Key) 分佈', top_n=12):
-                st.altair_chart(chart_key, use_container_width=True)
 
-        st.subheader("數值型資料 (Numerical Data)")
-        chart_col4, chart_col5 = st.columns(2)
 
-        with chart_col4:
-            if chart_party := plot_histogram(df, 'mood_party', '派對指數 (Mood: Party)'):
-                st.altair_chart(chart_party, use_container_width=True)
-            
-        with chart_col5:
+        st.divider()
+        st.subheader("其他數值維度 (Other Numerical Dimensions)")
+        num_cols = st.columns(2)
+        with num_cols[0]:
             if chart_dance := plot_histogram(df, 'danceability', '舞蹈指數 (Danceability)'):
                 st.altair_chart(chart_dance, use_container_width=True)
+        with num_cols[1]:
+            # 您可以添加更多直方圖，例如 BPM (如果有的話)
+            pass 
         
     # --- 5b. 單曲分析頁面 ---
     else:
@@ -244,10 +318,11 @@ def main():
             
             # 顯示 AI 分析 (如果存在)
             st.markdown("### AI 綜合分析 (AI Analysis)")
-            # 使用本地變數 ai_available
             if ai_available and pd.notna(song_data.get('ai_theme')) and song_data.get('ai_theme') not in ['SKIPPED', 'ERROR']:
+                # *** 使用更新後的分類欄位 ***
                 st.info(f"**AI 主題 (Theme):**\n{song_data['ai_theme']}")
-                st.warning(f"**AI 情緒 (Sentiment):**\n{song_data['ai_sentiment']}")
+                st.warning(f"**AI 情緒類別 (Category):** {song_data.get('ai_sentiment_category', 'N/A')}\n"
+                           f"*(原始情緒: {song_data.get('ai_sentiment', 'N/A')})*")
                 st.markdown("**AI 綜合筆記 (Notes):**")
                 st.write(song_data['ai_notes'])
             else:
@@ -268,7 +343,12 @@ def main():
             manual_cols = [
                 'track_name', 'album_title', 'lyrics_text', '作詞', '作曲', '製作', '編曲',
                 'ai_theme', 'ai_sentiment', 'ai_notes', 'display_name', 'has_ai_analysis',
+                'ai_sentiment_category' # 新增的欄位也要排除
             ]
+            
+            # 動態排除所有以 _bin 結尾的臨時欄位
+            bin_cols = [col for col in song_data.index if col.endswith('_bin')]
+            manual_cols.extend(bin_cols)
             
             other_fields = song_data.drop(labels=manual_cols, errors='ignore')
             other_fields_with_data = other_fields.dropna()
@@ -280,7 +360,6 @@ def main():
 
 # --- 6. 執行 Main ---
 if __name__ == "__main__":
-    # 不再依賴 session_state 進行初始化，main() 函數內部會處理
     main()
 
 
