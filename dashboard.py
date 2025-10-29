@@ -18,15 +18,13 @@ AI_COLS = ['ai_theme', 'ai_sentiment', 'ai_notes']
 
 # --- 3. 輔助函式 (Helper Functions) ---
 
-@st.cache_data(show_spinner="正在載入資料並檢查 AI 分析...", persist=True) # persist=True 盡量保持快取
+@st.cache_data(show_spinner="正在載入資料並檢查 AI 分析...", persist=True)
 def load_data_from_disk():
     """ 載入單一的主儀表板資料檔案。 """
     
-    # 建立檔案路徑 (使用 Path(__file__).parent 確保在 Streamlit 伺服器上的路徑正確)
     DATA_FILE = Path(__file__).parent / DATA_FILE_NAME
     
     if not DATA_FILE.exists():
-        # 如果檔案不存在，則必須停止並提示錯誤
         return None
     
     try:
@@ -36,20 +34,18 @@ def load_data_from_disk():
         # 捕獲所有讀取錯誤，並返回 None
         return None
 
-def initialize_session_state(df):
-    """ 初始化 session_state，只運行一次。 """
+def initialize_data_and_state(df):
+    """ 在數據載入成功後，初始化 df 欄位和 session_state。 """
     
     # 檢查 AI 欄位是否存在
     if all(col in df.columns for col in AI_COLS):
-        # 建立一個 'has_ai_analysis' 欄位
         df['has_ai_analysis'] = df['ai_theme'].notna() & (~df['ai_theme'].isin(['SKIPPED', 'ERROR']))
         st.session_state['ai_available'] = True
     else:
         df['has_ai_analysis'] = False
         st.session_state['ai_available'] = False
-    
-    # *** 關鍵修復：st.session_session_state -> st.session_state ***
-    st.session_state['initialized'] = True
+        
+    st.session_state['data_initialized'] = True # 設置初始化標記
     
     return df
 
@@ -59,15 +55,15 @@ def get_final_data():
     獲取最終的數據 DataFrame，並在初次時初始化狀態。
     """
     df = load_data_from_disk()
+    
     if df is not None:
-        if 'initialized' not in st.session_state or st.session_state['initialized'] == False:
-            # 只有在初次運行時執行一次初始化
-            df = initialize_session_state(df)
-            
-        # 確保在隨後的運行中，DF 仍然帶有這個計算好的欄位
+        # 如果是首次運行（或快取失效），則初始化數據和會話狀態
+        if 'data_initialized' not in st.session_state or st.session_state['data_initialized'] == False:
+            df = initialize_data_and_state(df)
+        
+        # 這是最終的防禦：確保 DataFrame 永遠帶有 has_ai_analysis 欄位
         if 'has_ai_analysis' not in df.columns:
-            # 這是防止快取錯誤的最佳手段
-            df = initialize_session_state(df)
+            df = initialize_data_and_state(df)
             
     return df
     
@@ -75,7 +71,6 @@ def get_final_data():
 def plot_categorical_chart(df, column, title, top_n=15):
     """ 繪製分類型別的長條圖 """
     if column not in df.columns or df[column].dropna().empty: return None
-    # *** 關鍵修復：使用 .copy() 確保是獨立的 DataFrame，消除 SettingWithCopyWarning ***
     data = df.dropna(subset=[column]).copy()
     
     if column == 'key_key':
@@ -83,7 +78,6 @@ def plot_categorical_chart(df, column, title, top_n=15):
             0.0: 'C', 1.0: 'C#', 2.0: 'D', 3.0: 'D#', 4.0: 'E', 5.0: 'F',
             6.0: 'F#', 7.0: 'G', 8.0: 'G#', 9.0: 'A', 10.0: 'A#', 11.0: 'B'
         }
-        # 使用 .loc 避免 SettingWithCopyWarning
         data.loc[:, 'key_name'] = data[column].apply(lambda x: key_map.get(x, pd.NA))
         data = data.dropna(subset=['key_name'])
         column = 'key_name'
@@ -106,7 +100,6 @@ def plot_categorical_chart(df, column, title, top_n=15):
 def plot_histogram(df, column, title, bin_count=10):
     """ 繪製數值型別的直方圖 (Histogram) """
     if column not in df.columns or df[column].dropna().empty: return None
-    # *** 關鍵修復：使用 .copy() 確保是獨立的 DataFrame，消除 SettingWithCopyWarning ***
     data = df.dropna(subset=[column]).copy()
 
     chart = alt.Chart(data).mark_bar().encode(
@@ -158,7 +151,7 @@ def main():
     # --- 5. 頁面邏輯 ---
 
     if selected_song == '[ 主儀表板 (General Dashboard) ]':
-        st.title("張信哲 (Jeff Chang) AI 歌詞分析儀表板 v1.11 [最終修復]") # 更新版本號
+        st.title("張信哲 (Jeff Chang) AI 歌詞分析儀表板 v1.12 [終極穩定版]") 
         
         # 統計數據
         total_songs = len(df)
@@ -296,9 +289,5 @@ def main():
 
 # --- 6. 執行 Main ---
 if __name__ == "__main__":
-    # 確保 session_state 在應用程式開始時只初始化一次
-    if 'initialized' not in st.session_state:
-        st.session_state['initialized'] = False
-        st.session_state['ai_available'] = False
     main()
 
